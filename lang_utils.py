@@ -175,6 +175,64 @@ def tidy_translation(text: str) -> str:
     return re.sub(r"\s{2,}", " ", text).strip()
 
 
+def _timed_words(words: List[dict]) -> List[dict]:
+    """Give every word a start/end: the aligner leaves some out (e.g. characters its model lacks)."""
+    out: List[dict] = []
+    for w in words:
+        text = str(w.get("word") or "").strip()
+        if not text:
+            continue
+        start, end = w.get("start"), w.get("end")
+        if start is None or end is None:
+            if out:  # glue an untimed word onto the previous one
+                out[-1] = {**out[-1], "word": out[-1]["word"] + " " + text}
+                continue
+            start = end = None
+        out.append({**w, "word": text, "start": start, "end": end})
+    # A leading untimed word takes the next word's start.
+    if out and out[0]["start"] is None:
+        nxt = next((w for w in out if w["start"] is not None), None)
+        if nxt is None:
+            return []
+        out[0] = {**out[0], "start": nxt["start"], "end": nxt["start"]}
+    return out
+
+
+def split_long_segments(segments: Iterable[dict], max_seconds: float = 8.0,
+                        min_gap_seconds: float = 0.35) -> List[dict]:
+    """
+    Split any segment longer than `max_seconds` at its longest pause between words,
+    repeating until each piece is short enough or has no pause of `min_gap_seconds`.
+
+    WhisperX splits segments into sentences using punctuation, but Hindi fine-tuned Whisper
+    models output none, so a 30 s stretch with several speakers came back as one segment and
+    would be dubbed as one line. Needs word timestamps (from forced alignment); segments
+    without them are returned unchanged.
+    """
+    out: List[dict] = []
+
+    def emit(seg: dict, words: List[dict]) -> None:
+        start, end = float(words[0]["start"]), float(words[-1]["end"])
+        if end - start > max_seconds and len(words) > 1:
+            gaps = [(float(words[i + 1]["start"]) - float(words[i]["end"]), i) for i in range(len(words) - 1)]
+            gap, i = max(gaps)
+            if gap >= min_gap_seconds:
+                emit(seg, words[: i + 1])
+                emit(seg, words[i + 1:])
+                return
+        out.append({**seg, "start": start, "end": end,
+                    "text": " ".join(w["word"] for w in words), "words": words})
+
+    for seg in segments:
+        words = _timed_words(seg.get("words") or [])
+        duration = float(seg.get("end", 0) or 0) - float(seg.get("start", 0) or 0)
+        if not words or duration <= max_seconds:
+            out.append(seg)
+            continue
+        emit(seg, words)
+    return out
+
+
 def nllb_max_new_tokens(input_tokens: int, cap: int = 512) -> int:
     """Output budget relative to the input, so a looping decode stops early."""
     return max(16, min(cap, 2 * int(input_tokens) + 16))

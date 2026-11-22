@@ -15,8 +15,20 @@ nllb_no_repeat_ngram: 4
 # auto | cpu_low | cpu_high | gpu_low | gpu_medium | gpu_high
 hardware_tier: auto
 
-# base | small | medium | large-v3 | large-v3-turbo
+# Speech-recognition model for every language. null = per-language choice below, else the
+# hardware tier default. Accepts a faster-whisper name (base | small | medium | large-v3 |
+# large-v3-turbo), a CTranslate2 repo/dir, or a transformers Whisper repo (converted once).
 whisper_model: null
+
+# Used when the source language is set (source_language or --source-lang) and whisper_model
+# is null. collabora/whisper-large-v2-hindi (CC-BY-4.0) heard the music-heavy Hindi test clip
+# far better than large-v3 or large-v3-turbo (README: Tested end to end). It outputs no
+# punctuation, so long segments are also split at pauses (max_segment_seconds).
+whisper_model_by_language:
+  hi: collabora/whisper-large-v2-hindi
+
+# Split any transcribed segment longer than this at its longest pause between words.
+max_segment_seconds: 8
 
 # facebook/nllb-200-distilled-600M | facebook/nllb-200-1.3B | facebook/nllb-200-3.3B
 translation_model: null

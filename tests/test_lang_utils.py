@@ -14,6 +14,7 @@ from lang_utils import (  # noqa: E402
     normalize_language_code,
     resolve_source_language,
     segments_to_srt,
+    split_long_segments,
     tidy_translation,
 )
 
@@ -127,6 +128,54 @@ class CollapseRepeats(unittest.TestCase):
     def test_collapses_three_or_more(self):
         self.assertEqual(collapse_repeats("no no no no"), "no")
         self.assertEqual(collapse_repeats("go away go away go away now"), "go away now")
+
+
+def _words(*timed):
+    return [{"word": w, "start": s, "end": e} for w, s, e in timed]
+
+
+class SplitLongSegments(unittest.TestCase):
+    # Shaped like the Hindi fine-tuned Whisper output on the test clip: no punctuation,
+    # three lines from different speakers in one 30 s segment.
+    LONG = {
+        "start": 19.6, "end": 49.1,
+        "text": "किसी भी शरीफ लड़की को उठाओ एक्सक्यूज़ मी कोई है तुम यहां क्या कर",
+        "words": _words(("किसी", 19.6, 20.0), ("भी", 20.0, 20.3), ("शरीफ", 20.4, 21.0),
+                        ("लड़की", 21.1, 21.6), ("को", 21.6, 21.8), ("उठाओ", 21.9, 25.0),
+                        ("एक्सक्यूज़", 32.1, 32.6), ("मी", 32.6, 32.9), ("कोई", 33.0, 33.3),
+                        ("है", 33.3, 34.1), ("तुम", 34.2, 34.5), ("यहां", 34.5, 35.0),
+                        ("क्या", 35.1, 35.5), ("कर", 35.5, 38.4)),
+    }
+
+    def test_splits_at_longest_pause(self):
+        parts = split_long_segments([self.LONG], max_seconds=8.0)
+        self.assertEqual([p["text"] for p in parts], [
+            "किसी भी शरीफ लड़की को उठाओ",
+            "एक्सक्यूज़ मी कोई है तुम यहां क्या कर",
+        ])
+        self.assertEqual((parts[0]["start"], parts[0]["end"]), (19.6, 25.0))
+        self.assertEqual((parts[1]["start"], parts[1]["end"]), (32.1, 38.4))
+        self.assertEqual(len(parts[1]["words"]), 8)
+
+    def test_keeps_short_segments_unchanged(self):
+        seg = {"start": 0.0, "end": 5.0, "text": "Excuse me, कोई है?", "words": _words(("x", 0, 5))}
+        self.assertEqual(split_long_segments([seg]), [seg])
+
+    def test_needs_a_real_pause(self):
+        # 10 s of continuous speech (gaps of 0.1 s) is left as one line rather than cut mid-phrase.
+        words = _words(*[(f"w{i}", i * 1.0, i * 1.0 + 0.9) for i in range(10)])
+        seg = {"start": 0.0, "end": 9.9, "text": "", "words": words}
+        self.assertEqual(len(split_long_segments([seg], max_seconds=8.0)), 1)
+
+    def test_without_word_timestamps_returns_segment(self):
+        seg = {"start": 0.0, "end": 30.0, "text": "unaligned"}
+        self.assertEqual(split_long_segments([seg]), [seg])
+
+    def test_untimed_word_stays_with_previous(self):
+        words = _words(("एक", 0.0, 1.0), ("ज़", None, None), ("दो", 1.1, 2.0), ("तीन", 9.0, 10.0))
+        parts = split_long_segments([{"start": 0.0, "end": 10.0, "text": "", "words": words}],
+                                    max_seconds=8.0)
+        self.assertEqual([p["text"] for p in parts], ["एक ज़ दो", "तीन"])
 
 
 class NllbMaxNewTokens(unittest.TestCase):

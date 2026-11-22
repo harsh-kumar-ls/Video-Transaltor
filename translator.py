@@ -31,7 +31,7 @@ from tts_engine import TTSEngine
 from asr_utils import resolve_whisper_model
 from lang_utils import (
     NLLB_LANG_CODES, nllb_code, nllb_max_new_tokens, normalize_language_code,
-    resolve_source_language, segments_to_srt, tidy_translation,
+    resolve_source_language, segments_to_srt, split_long_segments, tidy_translation,
 )
 
 
@@ -131,13 +131,20 @@ TRANSLATION_MODEL_TIERS: Dict[str, Tuple[str, str, str]] = {
 NLLB_NO_REPEAT_NGRAM = int(APP_CONFIG.get("nllb_no_repeat_ngram") or 4)
 
 
-def get_whisper_model_size() -> str:
-    """Pick a Whisper model size based on available hardware (or config.yaml override)."""
+def get_whisper_model_size(language: Optional[str] = None) -> str:
+    """
+    Pick the Whisper model: config.yaml `whisper_model` (applies to every language), then
+    `whisper_model_by_language` for a known source language, then the hardware tier default.
+    """
     # config.yaml override
     override = APP_CONFIG.get("whisper_model")
     if override:
         logging.info(f"[CONFIG] whisper_model override: {override!r}")
         return override
+    by_language = APP_CONFIG.get("whisper_model_by_language") or {}
+    if language and by_language.get(language):
+        logging.info(f"[CONFIG] whisper_model_by_language[{language!r}]: {by_language[language]!r}")
+        return by_language[language]
 
     hw_tier = APP_CONFIG.get("hardware_tier", "auto")
     if hw_tier == "auto" or hw_tier is None:
@@ -193,8 +200,8 @@ def transcribe_with_whisperx(audio_path: str, language: Optional[str] = None) ->
     detection can label Hindi speech as Urdu and write the transcript in Arabic script.
     """
     logging.info("Transcribing audio with WhisperX (faster-whisper backend)...")
-    model_size = get_whisper_model_size()
-    compute_type = "float16" if device.type == "cuda" else "int8"
+    model_size = get_whisper_model_size(language)
+    compute_type ="float16" if device.type == "cuda" else "int8"
     device_str = str(device).split(":")[0]  # "cuda" or "cpu"
 
     if device.type == "cuda":
@@ -253,6 +260,12 @@ def transcribe_with_whisperx(audio_path: str, language: Optional[str] = None) ->
         gc.collect()
         gpu_optimizer.clear_cache()
         logging.info("WhisperX forced alignment complete; word-level timestamps available.")
+        # WhisperX splits into sentences on punctuation; Hindi fine-tuned models emit none,
+        # so long multi-speaker stretches are also split at pauses between words.
+        max_seconds = float(APP_CONFIG.get("max_segment_seconds") or 8.0)
+        before = len(result.get("segments") or [])
+        result["segments"] = split_long_segments(result.get("segments") or [], max_seconds=max_seconds)
+        logging.info(f"[SPLIT] {before} -> {len(result['segments'])} segments (split at pauses, max {max_seconds:g} s)")
     except Exception as e:
         logging.warning(
             f"WhisperX alignment failed for lang '{detected_lang}': {e}. "
