@@ -4,6 +4,8 @@
 > by Felix Dawodu (MIT). The core pipeline, the web app, the demo video below and the commit history up to
 > March 2026 are his work. The changes made in this repository are listed under
 > [Changes in this fork](#changes-in-this-fork).
+> Hindi speech recognition uses [collabora/whisper-large-v2-hindi](https://huggingface.co/collabora/whisper-large-v2-hindi)
+> by Collabora (CC-BY-4.0), downloaded at run time and converted to CTranslate2; it is not redistributed here.
 
 Open-source video dubbing pipeline that translates speech, synthesizes new voice audio, preserves background sound effects/music, and muxes a final translated video.
 
@@ -78,8 +80,22 @@ Added on top of the original pipeline, for dubbing Hindi short dramas into Engli
   emitted detached (`I 've`, `don 't`, `tell .`).
 - **`tools/eval_dub.py`.** Transcribes the dubbed audio with Whisper and reports word error rate (WER) per subtitle cue
   against the English the dub was supposed to say.
-- **Tests.** `python -m unittest discover tests`: 22 tests for language codes, SRT output, translation clean-up and
-  the eval helpers.
+- **The configured Whisper model is now used.** `transcribe_with_whisperx` always loaded `large-v3-turbo`, so the
+  hardware tier and `whisper_model` were ignored. Models now go through `asr_utils.resolve_whisper_model`, which
+  accepts a faster-whisper name, a CTranslate2 repo or folder, or a transformers Whisper repo (converted to
+  CTranslate2 float16 once and cached).
+- **Hindi fine-tuned speech recognition.** `whisper_model_by_language` picks the model when the source language is
+  set; Hindi defaults to `collabora/whisper-large-v2-hindi`, chosen with `tools/compare_asr.py` (results below).
+- **Splitting at pauses.** WhisperX cuts lines at punctuation, but the Hindi model outputs none, so a 30 s stretch
+  with several speakers came back as one line. `split_long_segments()` cuts any segment over `max_segment_seconds`
+  (default 8) at its longest pause between aligned words.
+- **No merging across silence.** `merge_short_segments()` used to join a short segment to the next one however far
+  away; on the test clip that made an 18 s slot with 14 s of silence. It now merges only into a neighbour within
+  `merge_max_gap_seconds` (default 1 s).
+- **`tools/compare_asr.py`.** Runs several Whisper models on a clip the way the pipeline does (WhisperX, language
+  forced) and translates each transcript with the pipeline's NLLB settings, side by side.
+- **Tests.** `python -m unittest discover tests`: 38 tests for language codes, SRT output, translation clean-up,
+  model resolution, pause splitting, short-segment merging and the eval helpers.
 
 ## Tested end to end
 
@@ -91,15 +107,35 @@ One 71-second Hindi short-drama clip (vertical, dialogue over background music),
 | A | original pipeline + Hindi support | 72.9% | the first cue (misheard voice-over) looped in NLLB: "of the trunk of the trunk …" (172 words in 15 s) |
 | B | + loop-safe decoding and `tidy_translation()` | **7.5%** | all 6 cues dubbed; worst cue 16.7% |
 | C | B + Whisper on the Demucs vocal stem | 17.2% | dropped ~9 s of dialogue, so `asr_on_vocals` is off by default |
+| D | B + Hindi Whisper (`collabora/whisper-large-v2-hindi`), pause splitting, merge fix | **7.4%** | 9 lines; the English now makes sense on most of them (below) |
 
-Run B took 166 s for the 71 s clip with models already cached (the first run also downloads the models; NLLB-3.3B alone is about 17 GB).
+Run B took 166 s for the 71 s clip with models already cached (the first run also downloads the models; NLLB-3.3B alone is about 17 GB). Run D took 202 s.
+
+Dub WER barely moves between B and D because it does not measure meaning. What changed is what the dub says.
+Speech models compared on the same clip with `tools/compare_asr.py` (mixed audio):
+
+| Speech model | What it heard on the hardest lines (music-heavy voice-over, 0–17 s and 50–63 s) |
+|---|---|
+| large-v3-turbo (old default) | mostly garbage: "मैं खोड मैं खोड…", "शेयतान नितला", "…शादी और टेल" |
+| large-v3 | better, but "नफरत" → "नवरत" and "death" → "डेल" |
+| vasista22/whisper-hindi-large-v2 | dropped whole phrases |
+| **collabora/whisper-large-v2-hindi** | best: "फरिश्ते की जगह शैतान निकला", "बहुत हो गया प्यार बहुत हो गया इकरार अब तुम मेरा जुनून देखोगी शादी या डेथ" |
+
+Every model did worse on the Demucs vocal stem than on the mixed audio.
+
+| Time | English dub, run B | English dub, run D |
+|---|---|---|
+| 0–17 s | "I don't care for an unknown person in the trunk of the trunk, the elder of the world, Satan Nitla, so I'm Pnors…" | "Not for an unknown person, but if the devil takes the place of the family, then I am pure and this is my job." / "It's just that right now I've saved a messiah." |
+| 19–25 s | "Pick any decent girl, ask her to marry you, and if she says no, kill her, is that what Dana said?" | "Pick any decent girl, ask her to marry you, and if she says no, kill her. That's what you're supposed to do." |
+| 50–62 s | "I hate all the things I've given up for you. Ten is too many, too many is too many. Finally, you'll see my choice of wedding and tell." | "I hate everything you've given me." / "Just enough love, enough monotony Now you'll see my passion" / "Marriage or Death" |
 
 What this does and does not show:
 - Dub WER checks that the English voice says the intended subtitle clearly and in its slot. It does **not**
   check that the translation is right.
-- Translation quality is limited by Hindi speech recognition under music. Whisper misheard the opening voice-over,
-  so its English, although fluent, is wrong. Clear dialogue ("Excuse me, कोई है?" → "Excuse me, is anyone there?")
-  translated correctly.
+- Translation quality is limited by Hindi speech recognition under music. The Hindi model fixed most of the
+  closing lines, but the opening voice-over is still partly misheard ("nurse" → "pure", "mafia" → "messiah"), so
+  that English is still wrong. Without punctuation, a pause can also fall mid-sentence: one 0.5 s fragment
+  ("अभी तो पहल…") was dubbed as "Now the initiative".
 - One clip is a smoke test, not a benchmark.
 
 Kaggle notes (Python 3.13 image, Nov 2026): after installing whisperX (which moves torch to 2.8.0), also install the
@@ -321,7 +357,12 @@ NEXT_PUBLIC_WS_BASE_URL=wss://api.example.com
 
 Useful keys:
 - `hardware_tier`: `auto | cpu_low | cpu_high | gpu_low | gpu_medium | gpu_high`
-- `whisper_model`
+- `whisper_model`: one speech model for every language (faster-whisper name, CTranslate2 repo/folder, or transformers
+  Whisper repo)
+- `whisper_model_by_language`: per-language speech model when `whisper_model` is null (default `hi:
+  collabora/whisper-large-v2-hindi`)
+- `max_segment_seconds`, `merge_max_gap_seconds`: segment splitting at pauses and short-segment merging
+- `source_language`, `asr_on_vocals`, `nllb_no_repeat_ngram`
 - `translation_model`
 - `tts_mode`: `qwen3 | melo | gtts`
 - `qwen3_model_size`: `0.6B | 1.7B`
