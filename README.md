@@ -342,10 +342,3 @@ Major quality/stability milestones from the implementation plan are completed (A
 - More natural pacing
 
 ---
-
-## Contributing
-
-Issues and PRs are welcome. If you propose a quality/performance change, include:
-- a short reproducible test clip
-- hardware info (CPU/GPU + VRAM)
-- before/after observations (timing, quality, artifacts)
