@@ -28,6 +28,7 @@ from gpu_config import gpu_optimizer, detect_hardware_tier
 from performance_monitor import performance_monitor
 
 from tts_engine import TTSEngine
+from asr_utils import resolve_whisper_model
 from lang_utils import (
     NLLB_LANG_CODES, nllb_code, nllb_max_new_tokens, normalize_language_code,
     resolve_source_language, segments_to_srt, tidy_translation,
@@ -200,10 +201,14 @@ def transcribe_with_whisperx(audio_path: str, language: Optional[str] = None) ->
         logging.info(f"[WHISPERX] Using GPU: {torch.cuda.get_device_name(device)}")
     else:
         logging.info("[WHISPERX] Using CPU (no GPU available)")
-    logging.info(f"Loading WhisperX model: {model_size!r}, compute={compute_type!r}, device={device_str!r}")
+    # The model used to be hardcoded to large-v3-turbo, so the hardware tier and the
+    # whisper_model setting were ignored. resolve_whisper_model also accepts fine-tuned
+    # transformers checkpoints (e.g. a Hindi Whisper) and converts them for faster-whisper.
+    model_path = resolve_whisper_model(model_size)
+    logging.info(f"Loading WhisperX model: {model_size!r} ({model_path}), compute={compute_type!r}, device={device_str!r}")
     try:
         wx_model = whisperx.load_model(
-            "deepdml/faster-whisper-large-v3-turbo-ct2",
+            model_path,
             device_str,
             compute_type=compute_type,
             asr_options={"word_timestamps": True},
