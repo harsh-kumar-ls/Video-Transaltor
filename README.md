@@ -1,5 +1,9 @@
 # videoTranslator
 
+> **Credit.** This repository is built on [Felixdiamond/videoTranslator](https://github.com/Felixdiamond/videoTranslator)
+> by Felix Dawodu (MIT). The core pipeline, the web app, the demo video below and the commit history up to
+> March 2026 are his work.
+
 Open-source video dubbing pipeline that translates speech, synthesizes new voice audio, preserves background sound effects/music, and muxes a final translated video.
 
 This project has grown from a simple script into a full stack workflow:
@@ -50,9 +54,7 @@ See `LANGUAGE_MODEL_MAP` in `translator.py` for active speaker and language mapp
 
 ## 🎬 Demo: English to French Translation
 
-Here's a sample of the VideoTranslator in action!
-
-I translated the first 5 minutes of this video by Fern:
+A sample from the original project (made by Felix Dawodu): the first 5 minutes of this video by Fern, dubbed into French.
 - **Original Video (English):** [The Hunt for America's Smartest Killer](https://youtu.be/wkVygetgeRY?si=hKF2XqJD3jZU3KIL)
 
 - **Translated Output (First 5 mins, French):** [View Translated Sample (translated_fern_fr.mp4)](./translated_fern_fr.mp4)
