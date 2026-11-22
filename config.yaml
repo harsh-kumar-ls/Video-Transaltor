@@ -1,5 +1,10 @@
 # Optional runtime overrides.
 
+# Spoken language of the input video. auto = Whisper detection.
+# Set to hi for Hindi: detection can label Hindi as Urdu and transcribe it in Arabic script.
+# auto | hi | en | bn | mr | ta | te | gu | kn | ml | pa | ur | es | fr | zh | ja | ko | de | pt
+source_language: auto
+
 # auto | cpu_low | cpu_high | gpu_low | gpu_medium | gpu_high
 hardware_tier: auto
 

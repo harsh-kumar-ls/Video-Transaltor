@@ -26,8 +26,14 @@ type TtsModeOption = {
   label: string;
 };
 
+type SourceLanguageOption = {
+  code: string;
+  label: string;
+};
+
 type OptionsResponse = {
   languages: LanguageOption[];
+  sourceLanguages?: SourceLanguageOption[];
   ttsModes: TtsModeOption[];
   qwen3ModelSizes: string[];
   meloSpeakerIdsByLanguage: Record<string, string[]>;
@@ -42,7 +48,14 @@ const API_BASE_URL = (process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:
 const DEFAULT_WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws");
 const WS_BASE_URL = (process.env.NEXT_PUBLIC_WS_BASE_URL || DEFAULT_WS_BASE_URL).replace(/\/$/, "");
 
+const FALLBACK_SOURCE_LANGUAGES: SourceLanguageOption[] = [
+  { code: "auto", label: "Auto-detect" },
+  { code: "hi", label: "Hindi" },
+  { code: "en", label: "English" },
+];
+
 const FALLBACK_OPTIONS: OptionsResponse = {
+  sourceLanguages: FALLBACK_SOURCE_LANGUAGES,
   languages: [
     { code: "en", label: "English (US Speaker)", supportsMelo: true, defaultSpeakerId: "EN-US" },
     { code: "es", label: "Spanish (Spain Speaker)", supportsMelo: true, defaultSpeakerId: "ES" },
@@ -81,6 +94,7 @@ function encodePathForRoute(path: string): string {
 function buildWsUrl(params: {
   filePath: string;
   targetLanguage: string;
+  sourceLanguage: string;
   ttsMode: "melo" | "qwen3" | "gtts";
   qwen3ModelSize: string;
   speakerId: string;
@@ -88,6 +102,7 @@ function buildWsUrl(params: {
 }): string {
   const encodedPath = encodePathForRoute(params.filePath);
   const url = new URL(`${WS_BASE_URL}/translate/${encodedPath}/${encodeURIComponent(params.targetLanguage)}`);
+  url.searchParams.set("source_language", params.sourceLanguage || "auto");
   url.searchParams.set("tts_mode", params.ttsMode);
   url.searchParams.set("qwen3_model_size", params.qwen3ModelSize);
   url.searchParams.set("enable_voice_cloning", String(params.enableVoiceCloning));
@@ -108,6 +123,7 @@ export default function Home() {
 
   const [options, setOptions] = useState<OptionsResponse>(FALLBACK_OPTIONS);
   const [targetLanguage, setTargetLanguage] = useState("");
+  const [sourceLanguage, setSourceLanguage] = useState("auto");
   const [ttsMode, setTtsMode] = useState<"melo" | "qwen3" | "gtts">("qwen3");
   const [qwen3ModelSize, setQwen3ModelSize] = useState("1.7B");
   const [enableVoiceCloning, setEnableVoiceCloning] = useState(true);
@@ -250,6 +266,7 @@ export default function Home() {
       const wsUrl = buildWsUrl({
         filePath: uploadData.filePath,
         targetLanguage,
+        sourceLanguage,
         ttsMode,
         qwen3ModelSize,
         speakerId: ttsMode === "melo" ? meloSpeakerId : "",
@@ -392,6 +409,22 @@ export default function Home() {
             <p id="video-help" className="text-xs text-[#486581]">
               Files are uploaded to the backend workspace before translation starts.
             </p>
+
+            <label htmlFor="source-language" className="field-label">
+              Spoken language
+            </label>
+            <Select value={sourceLanguage} onValueChange={setSourceLanguage} disabled={isLoadingOptions || isTranslating}>
+              <SelectTrigger id="source-language" className="h-11 bg-white/80">
+                <SelectValue placeholder="Auto-detect" />
+              </SelectTrigger>
+              <SelectContent>
+                {(options.sourceLanguages ?? FALLBACK_SOURCE_LANGUAGES).map((language) => (
+                  <SelectItem key={language.code} value={language.code}>
+                    {language.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
 
             <label htmlFor="target-language" className="field-label">
               Target language

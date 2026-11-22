@@ -2,7 +2,8 @@
 
 > **Credit.** This repository is built on [Felixdiamond/videoTranslator](https://github.com/Felixdiamond/videoTranslator)
 > by Felix Dawodu (MIT). The core pipeline, the web app, the demo video below and the commit history up to
-> March 2026 are his work.
+> March 2026 are his work. The changes made in this repository are listed under
+> [Changes in this fork](#changes-in-this-fork).
 
 Open-source video dubbing pipeline that translates speech, synthesizes new voice audio, preserves background sound effects/music, and muxes a final translated video.
 
@@ -49,6 +50,29 @@ This project has grown from a simple script into a full stack workflow:
 `en`, `es`, `fr`, `zh`, `ja`, `ko`, `de`, `pt`
 
 See `LANGUAGE_MODEL_MAP` in `translator.py` for active speaker and language mappings.
+
+## Supported source (spoken) languages
+
+Auto-detect by default. Can be forced to: `hi` (Hindi), `en`, `bn`, `mr`, `ta`, `te`, `gu`, `kn`, `ml`, `pa`, `ur`,
+`es`, `fr`, `zh`, `ja`, `ko`, `de`, `pt` (see `lang_utils.py`).
+
+---
+
+## Changes in this fork
+
+Added on top of the original pipeline, for dubbing Hindi short dramas into English:
+
+- **Hindi as a source language.** NLLB-200 needs a script-specific code (`hin_Deva`). The original lookup fell back
+  to `f"{code}_Latn"`, giving `hi_Latn`, which is not an NLLB language code, so Hindi input was tagged with an
+  unknown-language token.
+  Codes for Hindi and nine other Indian languages now live in `lang_utils.py`, and an unknown code now raises an
+  error instead of being guessed.
+- **Forced source language** (`--source-lang hi`, `source_language` in `config.yaml`, or the new *Spoken language*
+  picker in the web UI). Whisper's detection can label Hindi speech as Urdu and transcribe it in Arabic script.
+  Forcing `hi` gives a Devanagari transcript, which the NLLB model and the Hindi alignment model expect.
+- **Subtitles.** Each run writes `subtitles/source_<lang>.srt` and `subtitles/translated_<lang>.srt`. The translated
+  file uses the final, length-compressed lines that were dubbed.
+- **Tests.** `python -m unittest discover tests` covers language-code handling and SRT output.
 
 ---
 
@@ -233,6 +257,12 @@ Example:
 
 ```bash
 python translator.py ./sample.mp4 fr
+```
+
+Hindi drama episode to English (forces Hindi instead of auto-detect):
+
+```bash
+python translator.py ./drama_ep1.mp4 en --source-lang hi
 ```
 
 Outputs are created in `*_translated_output/` directories.

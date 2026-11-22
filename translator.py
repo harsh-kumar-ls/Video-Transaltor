@@ -28,6 +28,9 @@ from gpu_config import gpu_optimizer, detect_hardware_tier
 from performance_monitor import performance_monitor
 
 from tts_engine import TTSEngine
+from lang_utils import (
+    NLLB_LANG_CODES, nllb_code, normalize_language_code, resolve_source_language, segments_to_srt,
+)
 
 
 log_dir = "logs"
@@ -119,18 +122,7 @@ TRANSLATION_MODEL_TIERS: Dict[str, Tuple[str, str, str]] = {
     "gpu_high":   ("facebook/nllb-200-3.3B",           "cuda", "float16"),
 }
 
-NLLB_LANG_CODES: Dict[str, str] = {
-    "en": "eng_Latn",
-    "es": "spa_Latn",
-    "fr": "fra_Latn",
-    "zh": "zho_Hans",
-    "ja": "jpn_Jpan",
-    "ko": "kor_Hang",
-    "de": "deu_Latn",
-    "pt": "por_Latn",
-    "it": "ita_Latn",
-    "ru": "rus_Cyrl",
-}
+# NLLB_LANG_CODES now lives in lang_utils.py (adds Hindi and other Indian languages).
 
 
 def get_whisper_model_size() -> str:
@@ -168,7 +160,7 @@ def create_project_structure(video_path: str, target_language: str) -> str:
     project_dir = os.path.join(os.getcwd(), project_dir_name)
     os.makedirs(project_dir, exist_ok=True)
 
-    for subdir in ['audio', 'transcripts', 'translations', 'translated_segments', 'audio_debug']:
+    for subdir in ['audio', 'transcripts', 'translations', 'translated_segments', 'audio_debug', 'subtitles']:
         os.makedirs(os.path.join(project_dir, subdir), exist_ok=True)
     
     logging.info(f"Project directory: {project_dir}")
@@ -185,11 +177,14 @@ def extract_audio(video_path: str, output_path: str) -> str:
         raise
     return output_path
 
-def transcribe_with_whisperx(audio_path: str) -> dict:
+def transcribe_with_whisperx(audio_path: str, language: Optional[str] = None) -> dict:
     """
     Transcribe audio using faster-whisper via WhisperX, then run forced phoneme
     alignment to get precise word-level start/end timestamps (±30ms accuracy).
     Falls back to segment-level timestamps if alignment fails.
+
+    `language` (e.g. "hi") skips Whisper's language detection. Use it for Hindi:
+    detection can label Hindi speech as Urdu and write the transcript in Arabic script.
     """
     logging.info("Transcribing audio with WhisperX (faster-whisper backend)...")
     model_size = get_whisper_model_size()
@@ -210,8 +205,12 @@ def transcribe_with_whisperx(audio_path: str) -> dict:
         )
         audio = whisperx.load_audio(audio_path)
         batch_size = 16 if device.type == "cuda" else 4
-        result = wx_model.transcribe(audio, batch_size=batch_size)
-        detected_lang = result.get("language", "en")
+        if language:
+            logging.info(f"[WHISPERX] Source language forced to '{language}' (detection skipped)")
+            result = wx_model.transcribe(audio, batch_size=batch_size, language=language)
+        else:
+            result = wx_model.transcribe(audio, batch_size=batch_size)
+        detected_lang = language or result.get("language", "en")
         logging.info(f"Transcription complete. Detected language: {detected_lang}")
     except Exception as e:
         logging.error(f"WhisperX transcription failed: {e}", exc_info=True)
@@ -443,8 +442,8 @@ def _translate_text_nllb(
     if source_language == target_language:
         return text
 
-    src_nllb = NLLB_LANG_CODES.get(source_language, f"{source_language}_Latn")
-    tgt_nllb = NLLB_LANG_CODES.get(target_language, f"{target_language}_Latn")
+    src_nllb = nllb_code(source_language)
+    tgt_nllb = nllb_code(target_language)
 
     logging.info(f"Translating ({src_nllb}→{tgt_nllb}): '{text[:60]}…'")
 
@@ -495,8 +494,8 @@ def batch_translate_segments(
     batch_size: int = 8,
 ) -> List[dict]:
     """Batch-translate segments and add `translated_text` to each result."""
-    src_nllb = NLLB_LANG_CODES.get(src_lang, f"{src_lang}_Latn")
-    tgt_nllb = NLLB_LANG_CODES.get(tgt_lang, f"{tgt_lang}_Latn")
+    src_nllb = nllb_code(src_lang)
+    tgt_nllb = nllb_code(tgt_lang)
     target_lang_id = tokenizer.convert_tokens_to_ids(tgt_nllb)
 
     texts = [seg["text"].strip() for seg in segments]
@@ -1191,8 +1190,13 @@ def process_video(
     qwen3_model_size: str = "1.7B",
     melo_speaker_id: Optional[str] = None,
     enable_voice_cloning: bool = True,
+    source_language_code: Optional[str] = None,
 ) -> Optional[str]:
-    """Main video translation pipeline."""
+    """Main video translation pipeline.
+
+    source_language_code: force the spoken language (e.g. "hi") instead of Whisper's
+    detection. Falls back to config.yaml `source_language`, then to detection.
+    """
 
     performance_monitor.log_gpu_status_direct()
     output_video_path = None  # Initialize
@@ -1204,6 +1208,13 @@ def process_video(
         enable_voice_cloning = bool(APP_CONFIG["enable_voice_cloning"])
     if melo_speaker_id is None and APP_CONFIG.get("melo_speaker_id"):
         melo_speaker_id = APP_CONFIG["melo_speaker_id"]
+    if not source_language_code:
+        source_language_code = APP_CONFIG.get("source_language")
+    # Validate the override up front, before any model is loaded.
+    forced_source = (
+        resolve_source_language(source_language_code, None)
+        if normalize_language_code(source_language_code) else None
+    )
 
 
     with performance_monitor.timer("total_video_processing_pipeline"):
@@ -1235,11 +1246,14 @@ def process_video(
                 logging.info("[LIFECYCLE] Demucs unloaded before transcription.")
 
             with performance_monitor.timer("transcription"):
-                transcript_data = transcribe_with_whisper(extracted_audio_path)
-                source_language_detected = transcript_data.get('language', 'en')
-                if source_language_detected and '-' in source_language_detected:
-                    source_language_detected = source_language_detected.split('-')[0]
-                logging.info(f"Detected source language: {source_language_detected}")
+                transcript_data = transcribe_with_whisper(extracted_audio_path, language=forced_source)
+                source_language_detected = resolve_source_language(
+                    forced_source, transcript_data.get('language', 'en')
+                )
+                logging.info(
+                    f"Source language: {source_language_detected}"
+                    + (" (forced)" if forced_source else " (detected)")
+                )
 
             transcript_text_path = os.path.join(project_dir, 'transcripts', 'transcript.txt')
             with open(transcript_text_path, 'w', encoding='utf-8') as f:
@@ -1340,6 +1354,16 @@ def process_video(
                                 break
 
                         translated_segments[idx]['translated_text'] = current_translation
+
+            # Subtitles: source transcript and final (post-compression) translation.
+            subtitles_dir = os.path.join(project_dir, 'subtitles')
+            for srt_name, srt_key in (
+                (f"source_{source_language_detected}.srt", "text"),
+                (f"translated_{target_language_code}.srt", "translated_text"),
+            ):
+                with open(os.path.join(subtitles_dir, srt_name), 'w', encoding='utf-8') as f:
+                    f.write(segments_to_srt(translated_segments, text_key=srt_key))
+            logging.info(f"Subtitles written to: {subtitles_dir}")
 
             # Release translation model before TTS.
             logging.info("Unloading translation model to free VRAM before TTS.")
@@ -1451,15 +1475,26 @@ def process_video(
 
 
 if __name__ == "__main__":
-    if len(sys.argv) not in [3, 4]:
-        print("Usage: python translator.py <video_path> <target_language_code> [custom_output_base_dir]")
-        print("Example: python translator.py myvideo.mp4 fr")
-        print("Example: python translator.py myvideo.mp4 fr /path/to/custom_outputs")
-        sys.exit(1)
+    import argparse
 
-    video_file_path = sys.argv[1]
-    target_lang = sys.argv[2]
-    
+    parser = argparse.ArgumentParser(
+        description="Dub a video into another language.",
+        epilog="Examples:\n  python translator.py myvideo.mp4 fr\n"
+               "  python translator.py drama_ep1.mp4 en --source-lang hi",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("video_path")
+    parser.add_argument("target_language_code")
+    parser.add_argument("custom_output_base_dir", nargs="?", help="reserved, informational only")
+    parser.add_argument(
+        "--source-lang", default=None,
+        help="force the spoken language, e.g. 'hi' for Hindi (default: Whisper auto-detect)",
+    )
+    args = parser.parse_args()
+
+    video_file_path = args.video_path
+    target_lang = args.target_language_code
+
     if not os.path.exists(video_file_path):
         logging.error(f"Video file not found: {video_file_path}")
         sys.exit(1)
@@ -1469,16 +1504,13 @@ if __name__ == "__main__":
         logging.error(f"Available languages: {list(LANGUAGE_MODEL_MAP.keys())}")
         sys.exit(1)
 
-    # Optional output base argument (reserved)
-    if len(sys.argv) == 4:
-        custom_output_base = sys.argv[3]
-        logging.info(f"Custom output base directory specified (currently informational): {custom_output_base}")
-
+    if args.custom_output_base_dir:
+        logging.info(f"Custom output base directory specified (currently informational): {args.custom_output_base_dir}")
 
     logging.info(f"Starting translation for: {video_file_path} to {target_lang}")
     
     try:
-        final_output_video = process_video(video_file_path, target_lang)
+        final_output_video = process_video(video_file_path, target_lang, source_language_code=args.source_lang)
         if final_output_video:
             print(f"\n✅ Translation successful!")
             print(f"🎞️  Output video saved to: {final_output_video}")

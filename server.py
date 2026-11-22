@@ -9,6 +9,7 @@ import asyncio
 import os
 
 from translator import process_video, LANGUAGE_MODEL_MAP
+from lang_utils import SOURCE_LANGUAGE_LABELS, normalize_language_code, NLLB_LANG_CODES
 
 app = FastAPI()
 
@@ -115,8 +116,13 @@ async def get_options():
             }
         )
 
+    source_languages = [{"code": "auto", "label": "Auto-detect"}] + [
+        {"code": code, "label": label} for code, label in SOURCE_LANGUAGE_LABELS.items()
+    ]
+
     return {
         "languages": languages,
+        "sourceLanguages": source_languages,
         "ttsModes": [
             {"value": "qwen3", "label": "Qwen3-TTS"},
             {"value": "melo", "label": "MeloTTS"},
@@ -170,12 +176,21 @@ async def translate_video_ws(
     qwen3_model_size: str = "1.7B",
     speaker_id: Optional[str] = None,
     enable_voice_cloning: bool = True,
+    source_language: str = "auto",
 ):
     await websocket.accept()
     logger.info(f"WebSocket connection accepted for video: {video_path}, target language: {target_language}")
 
     if target_language not in LANGUAGE_MODEL_MAP:
         error_msg = f"Unsupported target language: {target_language}. Supported languages are: {list(LANGUAGE_MODEL_MAP.keys())}"
+        logger.error(error_msg)
+        await websocket.send_text(f"Error: {error_msg}")
+        await websocket.close()
+        return
+
+    source_code = normalize_language_code(source_language)
+    if source_code is not None and source_code not in NLLB_LANG_CODES:
+        error_msg = f"Unsupported source_language: {source_language}. Supported values are: auto, {sorted(NLLB_LANG_CODES)}"
         logger.error(error_msg)
         await websocket.send_text(f"Error: {error_msg}")
         await websocket.close()
@@ -220,6 +235,7 @@ async def translate_video_ws(
             qwen3_model_size=qwen3_model_size,
             melo_speaker_id=speaker_id,
             enable_voice_cloning=enable_voice_cloning,
+            source_language_code=source_code,
         )
 
         if output_video_file_path:
