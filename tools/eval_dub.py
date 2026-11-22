@@ -65,6 +65,8 @@ def main():
     args = ap.parse_args()
 
     import jiwer
+    if args.device == "cuda":
+        import torch  # noqa: F401  loads torch's bundled CUDA libs (libcublas) for CTranslate2
     from faster_whisper import WhisperModel
 
     cues = parse_srt(open(args.srt, encoding="utf-8").read())
