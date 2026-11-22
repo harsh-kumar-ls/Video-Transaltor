@@ -15,6 +15,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -38,6 +39,17 @@ def parse_srt(text):
     return cues
 
 
+def load_audio_16k(path):
+    """Decode any media file to 16 kHz mono float32 with ffmpeg (avoids PyAV version clashes)."""
+    import numpy as np
+
+    raw = subprocess.run(
+        ["ffmpeg", "-nostdin", "-v", "error", "-i", path, "-f", "f32le", "-ac", "1", "-ar", "16000", "-"],
+        check=True, capture_output=True,
+    ).stdout
+    return np.frombuffer(raw, dtype=np.float32)
+
+
 def normalize(text):
     return " ".join(re.sub(r"[^a-z0-9' ]", " ", text.lower()).split())
 
@@ -58,7 +70,7 @@ def main():
     cues = parse_srt(open(args.srt, encoding="utf-8").read())
     model = WhisperModel(args.model, device=args.device,
                          compute_type="float16" if args.device == "cuda" else "int8")
-    segments, _ = model.transcribe(args.video, language=args.lang, word_timestamps=True)
+    segments, _ = model.transcribe(load_audio_16k(args.video), language=args.lang, word_timestamps=True)
     words = [w for seg in segments for w in (seg.words or [])]
 
     heard = [[] for _ in cues]
