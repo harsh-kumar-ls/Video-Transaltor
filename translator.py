@@ -1253,10 +1253,10 @@ def process_video(
                 logging.info("[LIFECYCLE] Demucs unloaded before transcription.")
 
             with performance_monitor.timer("transcription"):
-                # Transcribe the Demucs vocal stem, not the full mix: background music under
-                # dialogue (common in short dramas) caused misheard Hindi and garbage
-                # translations. Set asr_on_vocals: false in config.yaml to use the full mix.
-                asr_on_vocals = APP_CONFIG.get("asr_on_vocals", True) is not False
+                # Optional: transcribe the Demucs vocal stem instead of the full mix. Off by
+                # default: on the Hindi drama test clip it dropped ~9 s of dialogue and raised
+                # dub WER from 7.5% to 17.2% (see README "Tested end to end").
+                asr_on_vocals = APP_CONFIG.get("asr_on_vocals", False) is True
                 asr_input = (
                     demucs_vocals_for_asr
                     if asr_on_vocals and demucs_vocals_for_asr and os.path.exists(demucs_vocals_for_asr)

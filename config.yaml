@@ -5,8 +5,9 @@
 # auto | hi | en | bn | mr | ta | te | gu | kn | ml | pa | ur | es | fr | zh | ja | ko | de | pt
 source_language: auto
 
-# Run Whisper on the Demucs vocal stem instead of the full mix (better on dialogue over music).
-asr_on_vocals: true
+# Experimental: run Whisper on the Demucs vocal stem instead of the full mix.
+# Off by default - on the Hindi drama test clip it dropped dialogue (README: Tested end to end).
+asr_on_vocals: false
 
 # NLLB: block any phrase of this many words from repeating within one translation.
 nllb_no_repeat_ngram: 4

@@ -72,7 +72,39 @@ Added on top of the original pipeline, for dubbing Hindi short dramas into Engli
   Forcing `hi` gives a Devanagari transcript, which the NLLB model and the Hindi alignment model expect.
 - **Subtitles.** Each run writes `subtitles/source_<lang>.srt` and `subtitles/translated_<lang>.srt`. The translated
   file uses the final, length-compressed lines that were dubbed.
-- **Tests.** `python -m unittest discover tests` covers language-code handling and SRT output.
+- **Loop-safe translation.** NLLB decoding now blocks any repeated 4-word phrase and caps output length relative to
+  the input, and `tidy_translation()` collapses any runaway repeat that gets through.
+- **Clean English for TTS and subtitles.** `tidy_translation()` re-attaches contractions and punctuation that NLLB
+  emitted detached (`I 've`, `don 't`, `tell .`).
+- **`tools/eval_dub.py`.** Transcribes the dubbed audio with Whisper and reports word error rate (WER) per subtitle cue
+  against the English the dub was supposed to say.
+- **Tests.** `python -m unittest discover tests`: 22 tests for language codes, SRT output, translation clean-up and
+  the eval helpers.
+
+## Tested end to end
+
+One 71-second Hindi short-drama clip (vertical, dialogue over background music), dubbed to English on a Kaggle
+2× T4 notebook (`hardware_tier: gpu_high`, MeloTTS, `--source-lang hi`). Dub WER is from `tools/eval_dub.py`.
+
+| Run | What changed | Dub WER | Notes |
+|---|---|---|---|
+| A | original pipeline + Hindi support | 72.9% | the first cue (misheard voice-over) looped in NLLB: "of the trunk of the trunk …" (172 words in 15 s) |
+| B | + loop-safe decoding and `tidy_translation()` | **7.5%** | all 6 cues dubbed; worst cue 16.7% |
+| C | B + Whisper on the Demucs vocal stem | 17.2% | dropped ~9 s of dialogue, so `asr_on_vocals` is off by default |
+
+Run B took 166 s for the 71 s clip with models already cached (the first run also downloads the models; NLLB-3.3B alone is about 17 GB).
+
+What this does and does not show:
+- Dub WER checks that the English voice says the intended subtitle clearly and in its slot. It does **not**
+  check that the translation is right.
+- Translation quality is limited by Hindi speech recognition under music. Whisper misheard the opening voice-over,
+  so its English, although fluent, is wrong. Clear dialogue ("Excuse me, कोई है?" → "Excuse me, is anyone there?")
+  translated correctly.
+- One clip is a smoke test, not a benchmark.
+
+Kaggle notes (Python 3.13 image, Nov 2026): after installing whisperX (which moves torch to 2.8.0), also install the
+matching `torchaudio==2.8.0 torchvision==0.23.0` from the cu128 index and `moviepy>=2.2.0`; the image's own versions
+fail to import.
 
 ---
 
