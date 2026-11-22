@@ -13,6 +13,7 @@ from lang_utils import (  # noqa: E402
     nllb_max_new_tokens,
     normalize_language_code,
     resolve_source_language,
+    merge_short_segments,
     segments_to_srt,
     split_long_segments,
     tidy_translation,
@@ -176,6 +177,37 @@ class SplitLongSegments(unittest.TestCase):
         parts = split_long_segments([{"start": 0.0, "end": 10.0, "text": "", "words": words}],
                                     max_seconds=8.0)
         self.assertEqual([p["text"] for p in parts], ["एक ज़ दो", "तीन"])
+
+
+class MergeShortSegments(unittest.TestCase):
+    def test_merges_into_close_next_segment(self):
+        segs = [{"start": 34.15, "end": 34.79, "text": "Excuse me"},
+                {"start": 34.9, "end": 38.4, "text": "what are you doing here"}]
+        self.assertEqual(merge_short_segments(segs),
+                         [{"start": 34.15, "end": 38.4, "text": "Excuse me what are you doing here"}])
+
+    def test_does_not_merge_across_a_long_gap(self):
+        # Real case from the Hindi clip: a 0.6 s fragment at 36.6 s and the next line at 50.2 s
+        # were joined into one 18 s slot, dubbed with 14 s of silence.
+        frag = {"start": 36.63, "end": 37.25, "text": "अभी तो पहल"}
+        nxt = {"start": 50.23, "end": 54.56, "text": "तुम्हारे लिए"}
+        self.assertEqual(merge_short_segments([frag, nxt]), [frag, nxt])
+
+    def test_falls_back_to_previous_segment(self):
+        prev = {"start": 30.0, "end": 36.0, "text": "A", "words": [{"word": "A", "start": 30.0, "end": 36.0}],
+                "speaker": "S1"}
+        frag = {"start": 36.3, "end": 36.9, "text": "B", "words": [{"word": "B", "start": 36.3, "end": 36.9}]}
+        far = {"start": 50.0, "end": 55.0, "text": "C"}
+        merged = merge_short_segments([prev, frag, far])
+        self.assertEqual(len(merged), 2)
+        self.assertEqual((merged[0]["start"], merged[0]["end"], merged[0]["text"]), (30.0, 36.9, "A B"))
+        self.assertEqual([w["word"] for w in merged[0]["words"]], ["A", "B"])
+        self.assertEqual(merged[0]["speaker"], "S1")
+
+    def test_keeps_words_when_merging_forward(self):
+        a = {"start": 0.0, "end": 0.5, "text": "a", "words": [{"word": "a", "start": 0.0, "end": 0.5}]}
+        b = {"start": 0.6, "end": 3.0, "text": "b", "words": [{"word": "b", "start": 0.6, "end": 3.0}]}
+        self.assertEqual([w["word"] for w in merge_short_segments([a, b])[0]["words"]], ["a", "b"])
 
 
 class NllbMaxNewTokens(unittest.TestCase):

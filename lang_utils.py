@@ -233,6 +233,49 @@ def split_long_segments(segments: Iterable[dict], max_seconds: float = 8.0,
     return out
 
 
+def _join(a: dict, b: dict) -> dict:
+    """b's keys, spanning both segments, with text and word timings concatenated."""
+    text = " ".join(p for p in (str(a.get("text") or "").strip(), str(b.get("text") or "").strip()) if p)
+    joined = {**b, "start": min(float(a["start"]), float(b["start"])),
+              "end": max(float(a["end"]), float(b["end"])), "text": text}
+    if a.get("words") or b.get("words"):
+        joined["words"] = list(a.get("words") or []) + list(b.get("words") or [])
+    return joined
+
+
+def merge_short_segments(segments: List[dict], min_ms: int = 800,
+                         max_gap_seconds: float = 1.0) -> List[dict]:
+    """
+    Merge segments shorter than `min_ms` into a neighbour before translation and TTS:
+    the next segment if it starts within `max_gap_seconds`, else the previous one if it
+    ended within `max_gap_seconds`; otherwise the short segment stays on its own.
+
+    The original version always merged into the next segment, however far away. On the
+    Hindi test clip that joined a 0.6 s fragment at 37 s with a line starting 13 s later,
+    giving an 18 s slot filled with 14 s of silence.
+    """
+    segs = [{**s, "start": float(s.get("start", 0.0) or 0.0),
+             "end": float(s.get("end", s.get("start", 0.0)) or s.get("start", 0.0) or 0.0)}
+            for s in segments]
+    merged: List[dict] = []
+    i = 0
+    while i < len(segs):
+        seg = segs[i]
+        if (seg["end"] - seg["start"]) * 1000 < min_ms:
+            if i + 1 < len(segs) and segs[i + 1]["start"] - seg["end"] <= max_gap_seconds:
+                merged.append(_join(seg, segs[i + 1]))
+                i += 2
+                continue
+            if merged and seg["start"] - merged[-1]["end"] <= max_gap_seconds:
+                merged[-1] = {**_join(merged[-1], seg), **{k: v for k, v in merged[-1].items()
+                                                           if k not in ("start", "end", "text", "words")}}
+                i += 1
+                continue
+        merged.append(seg)
+        i += 1
+    return merged
+
+
 def nllb_max_new_tokens(input_tokens: int, cap: int = 512) -> int:
     """Output budget relative to the input, so a looping decode stops early."""
     return max(16, min(cap, 2 * int(input_tokens) + 16))

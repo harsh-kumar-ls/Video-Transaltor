@@ -30,6 +30,9 @@ whisper_model_by_language:
 # Split any transcribed segment longer than this at its longest pause between words.
 max_segment_seconds: 8
 
+# Segments under 0.8 s are merged into a neighbour only if it is this close (seconds).
+merge_max_gap_seconds: 1.0
+
 # facebook/nllb-200-distilled-600M | facebook/nllb-200-1.3B | facebook/nllb-200-3.3B
 translation_model: null
 

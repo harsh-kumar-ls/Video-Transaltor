@@ -33,6 +33,7 @@ from lang_utils import (
     NLLB_LANG_CODES, nllb_code, nllb_max_new_tokens, normalize_language_code,
     resolve_source_language, segments_to_srt, split_long_segments, tidy_translation,
 )
+from lang_utils import merge_short_segments as _merge_short_segments
 
 
 log_dir = "logs"
@@ -590,43 +591,9 @@ def analyze_segment_timing_budget(
 
 
 def merge_short_segments(segments: List[dict], min_ms: int = MIN_SEGMENT_MS) -> List[dict]:
-    """Merge very short consecutive segments into a neighbor before translation/TTS."""
-    if not segments:
-        return segments
-
-    merged: List[dict] = []
-    i = 0
-    while i < len(segments):
-        seg = segments[i]
-        seg_start = float(seg.get("start", 0.0) or 0.0)
-        seg_end = float(seg.get("end", seg_start) or seg_start)
-        duration_ms = int(max(0.0, seg_end - seg_start) * 1000)
-
-        if duration_ms < min_ms and i + 1 < len(segments):
-            next_seg = segments[i + 1]
-            next_start = float(next_seg.get("start", seg_end) or seg_end)
-            next_end = float(next_seg.get("end", next_start) or next_start)
-            combined_text = " ".join(
-                part for part in [str(seg.get("text", "")).strip(), str(next_seg.get("text", "")).strip()] if part
-            )
-            combined = {
-                **next_seg,
-                "start": min(seg_start, next_start),
-                "end": max(seg_end, next_end),
-                "text": combined_text,
-            }
-            merged.append(combined)
-            logging.info(
-                f"[MERGE] merged seg {i} ({duration_ms}ms) + seg {i+1} "
-                f"({int(max(0.0, next_end - next_start) * 1000)}ms) -> "
-                f"{int(max(0.0, combined['end'] - combined['start']) * 1000)}ms"
-            )
-            i += 2
-        else:
-            merged.append(seg)
-            i += 1
-
-    return merged
+    """Merge very short segments into a close neighbour (see lang_utils.merge_short_segments)."""
+    return _merge_short_segments(segments, min_ms=min_ms,
+                                 max_gap_seconds=float(APP_CONFIG.get("merge_max_gap_seconds") or 1.0))
 
 
 def split_translation_at_clauses(text: str) -> List[str]:
