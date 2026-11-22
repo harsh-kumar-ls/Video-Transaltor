@@ -29,7 +29,8 @@ from performance_monitor import performance_monitor
 
 from tts_engine import TTSEngine
 from lang_utils import (
-    NLLB_LANG_CODES, nllb_code, normalize_language_code, resolve_source_language, segments_to_srt,
+    NLLB_LANG_CODES, nllb_code, nllb_max_new_tokens, normalize_language_code,
+    resolve_source_language, segments_to_srt, tidy_translation,
 )
 
 
@@ -123,6 +124,10 @@ TRANSLATION_MODEL_TIERS: Dict[str, Tuple[str, str, str]] = {
 }
 
 # NLLB_LANG_CODES now lives in lang_utils.py (adds Hindi and other Indian languages).
+
+# Block any 4-word phrase from repeating inside one translation. Stops the decode loops seen
+# on misheard input ("of the trunk of the trunk of the ..."). Override in config.yaml.
+NLLB_NO_REPEAT_NGRAM = int(APP_CONFIG.get("nllb_no_repeat_ngram") or 4)
 
 
 def get_whisper_model_size() -> str:
@@ -456,12 +461,13 @@ def _translate_text_nllb(
         outputs = model.generate(
             **inputs,
             forced_bos_token_id=target_lang_id,
-            max_new_tokens=512,
+            max_new_tokens=nllb_max_new_tokens(inputs["input_ids"].shape[1]),
+            no_repeat_ngram_size=NLLB_NO_REPEAT_NGRAM,
             num_beams=num_beams,
             length_penalty=length_penalty,
         )
 
-    translated = tokenizer.batch_decode(outputs, skip_special_tokens=True)[0]
+    translated = tidy_translation(tokenizer.batch_decode(outputs, skip_special_tokens=True)[0])
     del inputs, raw_inputs, outputs
     gc.collect()
     return translated
@@ -516,13 +522,14 @@ def batch_translate_segments(
             out_tokens = model.generate(
                 **inputs,
                 forced_bos_token_id=target_lang_id,
-                max_new_tokens=512,
+                max_new_tokens=nllb_max_new_tokens(inputs["input_ids"].shape[1]),
+                no_repeat_ngram_size=NLLB_NO_REPEAT_NGRAM,
                 num_beams=4,
                 length_penalty=1.0,
             )
 
         batch_translations = tokenizer.batch_decode(out_tokens, skip_special_tokens=True)
-        translated_texts.extend([t.strip() for t in batch_translations])
+        translated_texts.extend([tidy_translation(t) for t in batch_translations])
         del inputs, out_tokens
         gc.collect()
         logging.info(f"Batch-translated segments {i}–{min(i + batch_size, len(texts)) - 1}")
@@ -1239,14 +1246,24 @@ def process_video(
                     "htdemucs_ft" if hw_tier_early == "gpu_high" else "htdemucs"
                 )
                 logging.info(f"[LIFECYCLE] Hardware tier: {hw_tier_early} → Demucs model: {_demucs_model_name}")
-                separate_vocals_from_audio(
+                demucs_vocals_for_asr, _ = separate_vocals_from_audio(
                     extracted_audio_path, project_dir, device, model_name=_demucs_model_name
                 )
                 # separate_vocals_from_audio clears Demucs and cache.
                 logging.info("[LIFECYCLE] Demucs unloaded before transcription.")
 
             with performance_monitor.timer("transcription"):
-                transcript_data = transcribe_with_whisper(extracted_audio_path, language=forced_source)
+                # Transcribe the Demucs vocal stem, not the full mix: background music under
+                # dialogue (common in short dramas) caused misheard Hindi and garbage
+                # translations. Set asr_on_vocals: false in config.yaml to use the full mix.
+                asr_on_vocals = APP_CONFIG.get("asr_on_vocals", True) is not False
+                asr_input = (
+                    demucs_vocals_for_asr
+                    if asr_on_vocals and demucs_vocals_for_asr and os.path.exists(demucs_vocals_for_asr)
+                    else extracted_audio_path
+                )
+                logging.info(f"[ASR] Transcribing {'Demucs vocal stem' if asr_input != extracted_audio_path else 'full mix'}: {asr_input}")
+                transcript_data = transcribe_with_whisper(asr_input, language=forced_source)
                 source_language_detected = resolve_source_language(
                     forced_source, transcript_data.get('language', 'en')
                 )

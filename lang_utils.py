@@ -1,10 +1,11 @@
 """
-Language helpers for the dubbing pipeline: source-language handling, NLLB codes and
-subtitle export.
+Language helpers for the dubbing pipeline: source-language handling, NLLB codes,
+translation clean-up and subtitle export.
 
 Added in this fork for Hindi (and other Indian-language) source video. Kept free of
 heavy imports (torch, whisperx) so it can be unit-tested on its own.
 """
+import re
 from typing import Dict, Iterable, List, Optional
 
 # ISO 639-1 code -> NLLB-200 code. NLLB needs the script suffix: Hindi is written in
@@ -127,3 +128,53 @@ def segments_to_srt(segments: Iterable[dict], text_key: str = "text") -> str:
             f"{len(blocks) + 1}\n{_srt_timestamp(start)} --> {_srt_timestamp(end)}\n{text}\n"
         )
     return "\n".join(blocks)
+
+
+# --- Translation clean-up -------------------------------------------------------------
+# Found in an end-to-end run on a Hindi drama clip (Kaggle, 2026-11-22):
+#  * NLLB output had detached punctuation and contractions ("I 've", "don 't", "tell .").
+#    Those go to TTS and subtitles as-is.
+#  * On a misheard, music-heavy segment NLLB looped ("of the trunk of the trunk of the ...")
+#    until max_new_tokens, and the loop was then squeezed into a 15 s slot.
+
+_CONTRACTION = re.compile(r"(\w)\s+'(s|t|m|d|ll|re|ve)\b", re.IGNORECASE)
+_SPACE_BEFORE_PUNCT = re.compile(r"\s+([.,!?;:%])")
+
+
+def collapse_repeats(text: str, min_copies: int = 3, max_ngram: int = 8) -> str:
+    """
+    Collapse a phrase repeated back-to-back `min_copies` or more times into one copy.
+
+    "of the trunk of the trunk of the trunk" -> "of the trunk". Two copies are left alone
+    ("too many, too many" can be real dialogue).
+    """
+    words = text.split()
+    changed = True
+    while changed:
+        changed = False
+        for n in range(1, max_ngram + 1):
+            i = 0
+            while i + n * min_copies <= len(words):
+                gram = words[i:i + n]
+                copies = 1
+                while words[i + copies * n:i + (copies + 1) * n] == gram:
+                    copies += 1
+                if copies >= min_copies:
+                    words = words[:i + n] + words[i + copies * n:]
+                    changed = True
+                else:
+                    i += 1
+    return " ".join(words)
+
+
+def tidy_translation(text: str) -> str:
+    """Re-attach punctuation and contractions, collapse runaway repeats, squash spaces."""
+    text = _CONTRACTION.sub(lambda m: f"{m.group(1)}'{m.group(2)}", text or "")
+    text = _SPACE_BEFORE_PUNCT.sub(r"\1", text)
+    text = collapse_repeats(text)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def nllb_max_new_tokens(input_tokens: int, cap: int = 512) -> int:
+    """Output budget relative to the input, so a looping decode stops early."""
+    return max(16, min(cap, 2 * int(input_tokens) + 16))

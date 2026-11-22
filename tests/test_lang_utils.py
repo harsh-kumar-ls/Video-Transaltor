@@ -8,10 +8,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from lang_utils import (  # noqa: E402
     NLLB_LANG_CODES,
     SOURCE_LANGUAGE_LABELS,
+    collapse_repeats,
     nllb_code,
+    nllb_max_new_tokens,
     normalize_language_code,
     resolve_source_language,
     segments_to_srt,
+    tidy_translation,
 )
 
 
@@ -92,6 +95,45 @@ class SegmentsToSrt(unittest.TestCase):
     def test_clamps_end_before_start(self):
         srt = segments_to_srt([{"start": 5, "end": 4, "text": "x"}])
         self.assertIn("00:00:05,000 --> 00:00:05,000", srt)
+
+
+class TidyTranslation(unittest.TestCase):
+    # Inputs below are real NLLB outputs from the Kaggle run on a Hindi drama clip.
+    def test_reattaches_contractions_and_punctuation(self):
+        self.assertEqual(
+            tidy_translation("I hate all the things I 've given up for you . Finally , you 'll see"),
+            "I hate all the things I've given up for you. Finally, you'll see",
+        )
+        self.assertEqual(
+            tidy_translation("If we don 't get the money by tomorrow, it will all be over."),
+            "If we don't get the money by tomorrow, it will all be over.",
+        )
+
+    def test_cuts_decode_loop(self):
+        looped = "I don't care for an unknown man in the trunk " + "of the trunk " * 40
+        self.assertEqual(
+            tidy_translation(looped), "I don't care for an unknown man in the trunk of the trunk"
+        )
+
+    def test_leaves_clean_text_alone(self):
+        clean = "Pick any decent girl, ask her to marry you, and if she says no, kill her?"
+        self.assertEqual(tidy_translation(clean), clean)
+
+
+class CollapseRepeats(unittest.TestCase):
+    def test_keeps_two_copies(self):
+        self.assertEqual(collapse_repeats("too many, too many will"), "too many, too many will")
+
+    def test_collapses_three_or_more(self):
+        self.assertEqual(collapse_repeats("no no no no"), "no")
+        self.assertEqual(collapse_repeats("go away go away go away now"), "go away now")
+
+
+class NllbMaxNewTokens(unittest.TestCase):
+    def test_scales_with_input_and_is_bounded(self):
+        self.assertEqual(nllb_max_new_tokens(10), 36)
+        self.assertEqual(nllb_max_new_tokens(0), 16)
+        self.assertEqual(nllb_max_new_tokens(1000), 512)
 
 
 if __name__ == "__main__":

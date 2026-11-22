@@ -5,6 +5,12 @@
 # auto | hi | en | bn | mr | ta | te | gu | kn | ml | pa | ur | es | fr | zh | ja | ko | de | pt
 source_language: auto
 
+# Run Whisper on the Demucs vocal stem instead of the full mix (better on dialogue over music).
+asr_on_vocals: true
+
+# NLLB: block any phrase of this many words from repeating within one translation.
+nllb_no_repeat_ngram: 4
+
 # auto | cpu_low | cpu_high | gpu_low | gpu_medium | gpu_high
 hardware_tier: auto
 
